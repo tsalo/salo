@@ -148,7 +148,7 @@ motcor_sltimes_wf.connect(outputspec, 'motion_sltime_corrected_files', datasink,
 motcor_sltimes_wf.connect(getsubs, 'subs', datasink, 'substitutions')
 
 # Run things and write crash files if necessary
-motcor_sltimes_wf.config['execution']['crashdump_dir'] = '/scratch/PSB6351_2017/students/salo/week5/nipype_crash'
+motcor_sltimes_wf.config['execution']['crashdump_dir'] = '/scratch/PSB6351_2017/students/salo/crash/week5_nipype_crash'
 motcor_sltimes_wf.base_dir = work_dir
 motcor_sltimes_wf.run(plugin='LSF', plugin_args={'bsub_args': '-q PQ_nbc'})
 
