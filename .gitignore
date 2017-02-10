@@ -89,7 +89,8 @@ ENV/
 .ropeproject
 
 # Repo-specific
+crash/
+working/
 *.nii.gz
 *.nii
 *.pklz
-
