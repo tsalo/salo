@@ -5,11 +5,9 @@ import numpy as np
 from nibabel import load
 import nipype.interfaces.fsl as fsl
 import nipype.interfaces.nipy as nipy
-import nipype.interfaces.freesurfer as fs
 import nipype.interfaces.io as nio
 import nipype.pipeline.engine as pe
 import nipype.interfaces.utility as util  
-import nipype.interfaces.afni as afni
 
 
 def pickfirst(func):
@@ -61,8 +59,8 @@ def calc_slicetimes(filenames, TR):
 
     return all_slice_times
 
-proj_dir = '/scratch/PSB6351/students/salo/'
-work_dir = 'FILL IN WITH APPROPRIATE FILE PATH'
+proj_dir = '/home/tsalo006/Music/'
+work_dir = '/scratch/PSB6351/students/salo/week5/'
 sink_dir = '/scratch/PSB6351/students/salo/week5/'
 
 sids = ['sub-01'] # ALWAYS TEST WITH ONE PARTICIPANT AND THEN RUN ON FULL SAMPLE
@@ -95,9 +93,9 @@ info = dict(mri_files=[['subject_id']])
 
 # Create a datasource node to get the mri files
 datasource = pe.Node(nio.DataGrabber(infields=['subject_id'], outfields=info.keys()), name='datasource')
-datasource.inputs.template = '*'
+datasource.inputs.template = '*_bold.nii.gz'
 datasource.inputs.base_directory = os.path.abspath(proj_dir)
-datasource.inputs.field_template = dict(mri_files='FILL IN WITH WAY TO FIND FILES USING A DATAGRABBER')
+datasource.inputs.field_template = dict(mri_files='%s/bold.nii.gz')
 datasource.inputs.template_args = info
 datasource.inputs.sort_filelist = True
 datasource.inputs.ignore_exception = False
