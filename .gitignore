@@ -90,6 +90,7 @@ ENV/
 
 # Repo-specific
 crash/
+data/
 working/
 *.nii.gz
 *.nii

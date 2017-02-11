@@ -61,14 +61,14 @@ def calc_slicetimes(filenames, TR):
 
     return all_slice_times
 
-proj_dir = '/home/tsalo006/Music/'
+proj_dir = '/scratch/PSB6351_2017/ds008_R2.0.0/'
 work_dir = '/scratch/PSB6351_2017/students/salo/working/'
-sink_dir = '/scratch/PSB6351_2017/students/salo/week5/'
+sink_dir = '/scratch/PSB6351_2017/students/salo/data/'
+err_dir = '/scratch/PSB6351_2017/students/salo/crash/week5/'
 
-sids = ['sub-01'] # ALWAYS TEST WITH ONE PARTICIPANT AND THEN RUN ON FULL SAMPLE
-#sids = ['sub-02', 'sub-03', 'sub-04', 'sub-05',
-#        'sub-06', 'sub-07', 'sub-08', 'sub-09', 'sub-10',
-#        'sub-11', 'sub-12', 'sub-13', 'sub-14', 'sub-15']
+sids = ['sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05',
+        'sub-06', 'sub-07', 'sub-09', 'sub-10', 'sub-11',
+        'sub-12', 'sub-13', 'sub-14', 'sub-15']
 
 # Workflow
 motcor_sltimes_wf = pe.Workflow('motcor_sltimes_wf')
@@ -80,18 +80,18 @@ output_fields = ['reference', 'motion_parameters',
 outputspec = pe.Node(util.IdentityInterface(fields=output_fields),
                      name='outputspec')
 
-
 # Node: subject_iterable
 subj_iterable = pe.Node(util.IdentityInterface(fields=['subject_id'],
                                                mandatory_inputs=True),
                         name='subj_iterable')
 subj_iterable.iterables = ('subject_id', sids)
 
-
 info = dict(mri_files=[['subject_id']])
 
 # Create a datasource node to get the mri files
-datasource = pe.Node(nio.DataGrabber(infields=['subject_id'], outfields=info.keys()), name='datasource')
+datasource = pe.Node(nio.DataGrabber(infields=['subject_id'],
+                                     outfields=info.keys()),
+                     name='datasource')
 datasource.inputs.template = '*_bold.nii.gz'
 datasource.inputs.base_directory = os.path.abspath(proj_dir)
 datasource.inputs.field_template = dict(mri_files='%s/func/*_bold.nii.gz')
@@ -108,8 +108,10 @@ getsubs = pe.Node(util.Function(input_names=['subject_id', 'mri_files'],
                                 function=get_subs),
                   name='getsubs')
 getsubs.inputs.ignore_exception = False
-motcor_sltimes_wf.connect(subj_iterable, 'subject_id', getsubs, 'subject_id')
-motcor_sltimes_wf.connect(datasource, 'mri_files', getsubs, 'mri_files')
+motcor_sltimes_wf.connect(subj_iterable, 'subject_id',
+                          getsubs, 'subject_id')
+motcor_sltimes_wf.connect(datasource, 'mri_files',
+                          getsubs, 'mri_files')
 
 # Extract the first volume of the first run as the reference 
 extractref = pe.Node(fsl.ExtractROI(t_size=1, t_min=0),
@@ -141,14 +143,18 @@ motcor_sltimes_wf.connect(motion_sltime_correct, 'out_file',
 # Save the relevant data into an output directory
 datasink = pe.Node(nio.DataSink(), name='datasink')
 datasink.inputs.base_directory = sink_dir
-motcor_sltimes_wf.connect(subj_iterable, 'subject_id', datasink, 'container')
-motcor_sltimes_wf.connect(outputspec, 'reference', datasink, 'ref')
-motcor_sltimes_wf.connect(outputspec, 'motion_parameters', datasink, 'motion')
-motcor_sltimes_wf.connect(outputspec, 'motion_sltime_corrected_files', datasink, 'func')
+motcor_sltimes_wf.connect(subj_iterable, 'subject_id',
+                          datasink, 'container')
+motcor_sltimes_wf.connect(outputspec, 'reference',
+                          datasink, 'ref')
+motcor_sltimes_wf.connect(outputspec, 'motion_parameters',
+                          datasink, 'motion')
+motcor_sltimes_wf.connect(outputspec, 'motion_sltime_corrected_files',
+                          datasink, 'func')
 motcor_sltimes_wf.connect(getsubs, 'subs', datasink, 'substitutions')
 
 # Run things and write crash files if necessary
-motcor_sltimes_wf.config['execution']['crashdump_dir'] = '/scratch/PSB6351_2017/students/salo/crash/week5_nipype_crash'
+motcor_sltimes_wf.config['execution']['crashdump_dir'] = err_dir
 motcor_sltimes_wf.base_dir = work_dir
 
 motcor_sltimes_wf.write_graph(graph2use='exec')
