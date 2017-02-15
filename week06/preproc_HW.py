@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 
-import os
+import shutil
+from os.path import abspath, join
 import nipype.interfaces.fsl as fsl
 import nipype.interfaces.nipy as nipy
 import nipype.interfaces.freesurfer as fs
 import nipype.interfaces.io as nio
 import nipype.pipeline.engine as pe
 import nipype.interfaces.utility as util  
-import nipype.interfaces.afni as afni
 
 
 def pickfirst(func):
@@ -20,42 +20,29 @@ def pickfirst(func):
         return func
 
 
-def pickvol(filenames, fileidx, which):
-    """
-    """
-    import numpy as np
-    from nibabel import load
-    if which.lower() == 'first':
-        idx = 0
-    elif which.lower() == 'middle':
-        idx = int(np.ceil(load(filenames[fileidx]).get_shape()[3]/2))
-    else:
-        raise Exception('unknown value for volume selection : %s'%which)
-    return idx
-
-
 def get_subs(subject_id, mri_files):
     """
+    Remove annoying subfolders from output files.
     """
     subs = []
     subs.append(('_subject_id_%s/' %subject_id, ''))
     for i, mri_file in enumerate(mri_files):
-        subs.append(('_motion_sltime_correct%d/' %i, ''))
+        subs.append(('_coregister%d/' %i, ''))
         subs.append(('_motion_correct%d/' %i, ''))
     return subs
 
+class_dir = '/scratch/PSB6351_2017/'
+data_dir = join(class_dir, 'ds008_R2.0.0/')
+subjects_dir = join(data_dir, 'surfaces/')
+salo_dir = join(class_dir, 'students/salo/')
+work_dir = join(salo_dir, 'working/')
+out_dir = join(salo_dir, 'data/')
+err_dir = join(salo_dir, 'crash/week06/')
 
-proj_dir = '/scratch/PSB6351_2017/ds008_R2.0.0/'
-subjects_dir = '/scratch/PSB6351_2017/ds008_R2.0.0/surfaces/'
-work_dir = '/scratch/PSB6351_2017/students/salo/working/'
-sink_dir = '/scratch/PSB6351_2017/students/salo/data/'
-err_dir = '/scratch/PSB6351_2017/students/salo/crash/week06/'
+sids = ['sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05',
+        'sub-06', 'sub-07', 'sub-09', 'sub-10', 'sub-11',
+        'sub-12', 'sub-13', 'sub-14', 'sub-15']
 
-sids = ['sub-01']#, 'sub-02', 'sub-03', 'sub-04', 'sub-05',
-#        'sub-06', 'sub-07', 'sub-09', 'sub-10', 'sub-11',
-#        'sub-12', 'sub-13', 'sub-14', 'sub-15']
-
-##
 # Workflow
 preproc_wf = pe.Workflow('preproc_wf')
 preproc_wf.base_dir = work_dir
@@ -75,7 +62,6 @@ subj_iterable = pe.Node(util.IdentityInterface(fields=['subject_id'],
                                                mandatory_inputs=True),
                         name='subj_iterable')
 subj_iterable.iterables = ('subject_id', sids)
-
 info = dict(mri_files=[['subject_id']])
 
 # Create a datasource node to get the mri files
@@ -83,7 +69,7 @@ datasource = pe.Node(nio.DataGrabber(infields=['subject_id'],
                                      outfields=info.keys()),
                      name='datasource')
 datasource.inputs.template = '*_bold.nii.gz'
-datasource.inputs.base_directory = os.path.abspath(proj_dir)
+datasource.inputs.base_directory = abspath(data_dir)
 datasource.inputs.field_template = dict(mri_files='%s/func/*_bold.nii.gz')
 datasource.inputs.template_args = info
 datasource.inputs.sort_filelist = True
@@ -112,8 +98,7 @@ preproc_wf.connect(datasource, ('mri_files', pickfirst),
 preproc_wf.connect(extractref, 'roi_file',
                    outputspec, 'reference')
 
-# NOTE: Committing to NIPY
-# Simultaneous motion and slice timing correction with Nipy algorithm
+# Motion correction with Nipy algorithm
 motion_correct = pe.MapNode(nipy.SpaceTimeRealigner(),
                             name='motion_correct',
                             iterfield=['in_file'])
@@ -126,7 +111,7 @@ preproc_wf.connect(motion_correct, 'par_file',
 preproc_wf.connect(motion_correct, 'out_file',
                    outputspec, 'motion_corrected_files')
 
-
+# Coregistration with Freesurfer's BBRegister
 coregister = pe.MapNode(fs.BBRegister(subjects_dir=subjects_dir,
                                       contrast_type='t1',
                                       init='header',
@@ -141,28 +126,26 @@ preproc_wf.connect(coregister, 'out_fsl_file', outputspec, 'fsl_reg_file')
 preproc_wf.connect(coregister, 'min_cost_file', outputspec, 'reg_cost')
 
 # Save the relevant data into an output directory
-# Save the relevant data into an output directory
-#rename_reg_cost = pe.MapNode(util.Rename(format_string='%(seq)s.mincost',
-#                                         parse_string='.*corr_(?P<seq>.*)_.*'),
-#                             name='rename_reg_cost', iterfield=['in_file'])
-
 datasink = pe.Node(nio.DataSink(), name='datasink')
-datasink.inputs.base_directory = sink_dir
+datasink.inputs.base_directory = out_dir
 preproc_wf.connect(subj_iterable, 'subject_id', datasink, 'container')
 preproc_wf.connect(outputspec, 'reference', datasink, 'preproc.ref')
 preproc_wf.connect(outputspec, 'motion_parameters', datasink, 'preproc.motion')
 preproc_wf.connect(outputspec, 'motion_corrected_files', datasink, 'preproc.func')
 preproc_wf.connect(outputspec, 'reg_file', datasink, 'preproc.reg_file')
 preproc_wf.connect(outputspec, 'reg_cost', datasink, 'preproc.reg_cost')
-#preproc_wf.connect(outputspec, 'reg_cost', rename_reg_cost, 'in_file')
-#preproc_wf.connect(rename_reg_cost, 'out_file', datasink, 'preproc.reg_cost')
 
 preproc_wf.connect(outputspec, 'fsl_reg_file', datasink, 'preproc.fsl_reg_file')
 preproc_wf.connect(getsubs, 'subs', datasink, 'substitutions')
 
+# Create and copy graphs to output directory for easy access.
+preproc_wf.write_graph(graph2use='flat')
+
+shutil.copy(join(preproc_wf.base_dir, preproc_wf.name, 'graph_detailed.dot.png'),
+            join(out_dir, 'pipeline_graph_detailed.png'))
+shutil.copy(join(preproc_wf.base_dir, preproc_wf.name, 'graph.dot.png'),
+            join(out_dir, 'pipeline_graph_basic.png'))
+
 # Run things and write crash files if necessary
 preproc_wf.config['execution']['crashdump_dir'] = err_dir
-preproc_wf.base_dir = work_dir
-
-preproc_wf.write_graph(graph2use='flat')
 preproc_wf.run(plugin='LSF', plugin_args={'bsub_args': '-q PQ_nbc'})
