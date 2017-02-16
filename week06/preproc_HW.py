@@ -99,9 +99,8 @@ preproc_wf.connect(extractref, 'roi_file',
                    outputspec, 'reference')
 
 # Motion correction with Nipy algorithm
-motion_correct = pe.MapNode(nipy.SpaceTimeRealigner(),
-                            name='motion_correct',
-                            iterfield=['in_file'])
+motion_correct = pe.Node(nipy.SpaceTimeRealigner(),
+                         name='motion_correct')
 motion_correct.plugin_args = {'bsub_args': '-n 12'}
 motion_correct.plugin_args = {'bsub_args': '-R "span[hosts=1]"'}
 preproc_wf.connect(datasource, 'mri_files',
