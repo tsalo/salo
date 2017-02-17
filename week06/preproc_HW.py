@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import shutil
-from os.path import abspath, join
+from os.path import abspath, join, dirname
 import nipype.interfaces.fsl as fsl
 import nipype.interfaces.nipy as nipy
 import nipype.interfaces.freesurfer as fs
@@ -35,6 +35,7 @@ class_dir = '/scratch/PSB6351_2017/'
 data_dir = join(class_dir, 'ds008_R2.0.0/')
 subjects_dir = join(data_dir, 'surfaces/')
 salo_dir = join(class_dir, 'students/salo/')
+diagram_dir = dirname(__file__)
 work_dir = join(salo_dir, 'working/')
 out_dir = join(salo_dir, 'data/')
 err_dir = join(salo_dir, 'crash/week06/')
@@ -139,9 +140,9 @@ preproc_wf.connect(getsubs, 'subs', datasink, 'substitutions')
 preproc_wf.write_graph(graph2use='flat')
 
 shutil.copy(join(preproc_wf.base_dir, preproc_wf.name, 'graph_detailed.dot.png'),
-            join(out_dir, 'pipeline_graph_detailed.png'))
+            join(diagram_dir, 'pipeline_graph_detailed.png'))
 shutil.copy(join(preproc_wf.base_dir, preproc_wf.name, 'graph.dot.png'),
-            join(out_dir, 'pipeline_graph_basic.png'))
+            join(diagram_dir, 'pipeline_graph_basic.png'))
 
 # Run things and write crash files if necessary
 preproc_wf.config['execution']['crashdump_dir'] = err_dir
