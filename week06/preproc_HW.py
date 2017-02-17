@@ -111,15 +111,13 @@ preproc_wf.connect(motion_correct, 'out_file',
                    outputspec, 'motion_corrected_files')
 
 # Coregistration with Freesurfer's BBRegister
-coregister = pe.MapNode(fs.BBRegister(subjects_dir=subjects_dir,
-                                      contrast_type='t1',
-                                      init='header',
-                                      out_fsl_file=True),
-                        name='coregister',
-                        iterfield=['source_file'])
+coregister = pe.Node(fs.BBRegister(subjects_dir=subjects_dir,
+                                   contrast_type='t1',
+                                   init='header',
+                                   out_fsl_file=True),
+                        name='coregister')
 preproc_wf.connect(subj_iterable, 'subject_id', coregister, 'subject_id')
-preproc_wf.connect(motion_correct, 'out_file', coregister, 'source_file')
-
+preproc_wf.connect(motion_correct, ('out_file', pickfirst), coregister, 'source_file')
 preproc_wf.connect(coregister, 'out_reg_file', outputspec, 'reg_file')
 preproc_wf.connect(coregister, 'out_fsl_file', outputspec, 'fsl_reg_file')
 preproc_wf.connect(coregister, 'min_cost_file', outputspec, 'reg_cost')
