@@ -113,7 +113,7 @@ preproc_wf.connect(motion_correct, 'out_file',
 
 # Coregistration with Freesurfer's BBRegister
 coregister = pe.Node(fs.BBRegister(subjects_dir=subjects_dir,
-                                   contrast_type='t1',
+                                   contrast_type='t2',
                                    init='header',
                                    out_fsl_file=True),
                         name='coregister')
