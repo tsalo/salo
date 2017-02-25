@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 from os.path import join, abspath, dirname
 import nipype.pipeline.engine as pe
@@ -9,10 +10,6 @@ import nipype.interfaces.afni as afni
 import nipype.interfaces.freesurfer as fs
 import nipype.interfaces.utility as util  
 import nipype.algorithms.rapidart as ra
-
-import sys
-sys.path.append('/scratch/PSB6351_2017/utility_scripts')
-#from fs_skullstrip_util import create_freesurfer_skullstrip_workflow
 
 import numpy as np
 #import scipy as sp
@@ -232,7 +229,7 @@ output_fields = ['reference',
                  'motion_parameters',
                  'motion_parameters_plusDerivs',
                  'motionandoutlier_noise_file',
-                 'motion_sltime_corrected_files',
+                 'motion_corrected_files',
                  'afni_coreg_xfm',
                  'reg_file',
                  'reg_cost',
@@ -436,7 +433,7 @@ for i, kernel in enumerate(kernel_values):
                                           op_string='-mas'),
                            iterfield=['in_file'],
                            name='susan_mask_{0}'.format(kernel))
-    preproc_wf.connect(susan_smooth[i], 'out_file', maskfunc2, 'in_file')
+    preproc_wf.connect(susan_smooth[i], 'smoothed_file', maskfunc2, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc2, 'in_file2')
     preproc_wf.connect(maskfunc2, 'out_file',
@@ -454,18 +451,17 @@ for i, kernel in enumerate(kernel_values):
                                           op_string='-mas'),
                            iterfield=['in_file'],
                            name='fsl_mask_{0}'.format(kernel))
-    preproc_wf.connect(fsl_smooth[i], 'out_file', maskfunc2, 'in_file')
+    preproc_wf.connect(fsl_smooth[i], 'smoothed_file', maskfunc2, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc2, 'in_file2')
     preproc_wf.connect(maskfunc2, 'out_file',
                        outputspec, 'fsl_{0}_smoothed_files'.format(kernel))
     
     # AFNI Smoothing
-    afni_smooth[i] = pe.MapNode(afni.preprocess.BlurToFWHM(),
+    afni_smooth[i] = pe.MapNode(afni.preprocess.BlurToFWHM(fwhm=float(kernel),
+                                                           outputtype='NIFTI_GZ'),
                                 iterfield=['in_file'],
                                 name='afni_smooth_{0}'.format(kernel))
-    afni_smooth[i].inputs.fwhm=float(kernel)
-    afni_smooth[i].inputs.outputtype = 'NIFTI_GZ'
     preproc_wf.connect(maskfunc, 'out_file', afni_smooth[i], 'in_file')
 
     # Mask the smoothed data with the dilated mask
@@ -480,53 +476,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'afni_{0}_smoothed_files'.format(kernel))
 
 preproc_wf.write_graph(graph2use='flat')
-raise Exception()
-# Use RapidART to detect motion/intensity outliers
-art = pe.MapNode(ra.ArtifactDetect(use_differences=[True, False],
-                                   use_norm=True,
-                                   zintensity_threshold=3,
-                                   norm_threshold=1,
-                                   bound_by_brainmask=True,
-                                   mask_type='file'),
-                 iterfield=['realignment_parameters', 'realigned_files'],
-                 name='art')
-art.inputs.parameter_source = 'NiPy'
-preproc_wf.connect(motion_sltime_correct, 'par_file',
-                   art, 'realignment_parameters')
-preproc_wf.connect(motion_sltime_correct, 'out_file',
-                   art, 'realigned_files')
-preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
-                   art, 'mask_file')
-preproc_wf.connect(art, 'norm_files', outputspec, 'artnorm_files')
-preproc_wf.connect(art, 'outlier_files', outputspec, 'artoutlier_files')
-preproc_wf.connect(art, 'displacement_files',
-                   outputspec, 'artdisplacement_files')
 
-# Compute motion regressors (save file with 1st and 2nd derivatives)
-motreg = pe.Node(util.Function(input_names=['motion_params', 'order',
-                                            'derivatives'],
-                               output_names=['out_files'],
-                               function=motion_regressors,
-                               imports=imports),
-                 name='getmotionregress')
-preproc_wf.connect(motion_sltime_correct, 'par_file', motreg, 'motion_params')
-preproc_wf.connect(motreg, 'out_files',
-                   outputspec, 'motion_parameters_plusDerivs')
-
-# Create a filter text file to remove motion (+ derivatives), art confounds,
-# and 1st, 2nd, and 3rd order legendre polynomials.
-createfilter = pe.Node(util.Function(input_names=['motion_params', 'comp_norm',
-                                                  'outliers', 'detrend_poly'],
-                                     output_names=['out_files'],
-                                     function=build_filter,
-                                     imports=imports),
-                        name='makemotionbasedfilter')
-createfilter.inputs.detrend_poly = 3
-preproc_wf.connect(motreg, 'out_files', createfilter, 'motion_params')
-preproc_wf.connect(art, 'norm_files', createfilter, 'comp_norm')
-preproc_wf.connect(art, 'outlier_files', createfilter, 'outliers')
-preproc_wf.connect(createfilter, 'out_files',
-                   outputspec, 'motionandoutlier_noise_file')
 
 # Band-pass filter the timeseries
 if temporal_filterer is 'use_fsl_bp':
@@ -579,6 +529,53 @@ elif temporal_filterer is 'use_np_bp':
     bandpass.inputs.lowpass_freq = .2#YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
     preproc_wf.connect(maskfunc2, 'out_file', bandpass, 'files')
     preproc_wf.connect(bandpass, 'out_files', outputspec, 'bandpassed_files')
+
+# Use RapidART to detect motion/intensity outliers
+art = pe.MapNode(ra.ArtifactDetect(use_differences=[True, False],
+                                   use_norm=True,
+                                   zintensity_threshold=3,
+                                   norm_threshold=1,
+                                   bound_by_brainmask=True,
+                                   mask_type='file'),
+                 iterfield=['realignment_parameters', 'realigned_files'],
+                 name='art')
+art.inputs.parameter_source = 'NiPy'
+preproc_wf.connect(motion_sltime_correct, 'par_file',
+                   art, 'realignment_parameters')
+preproc_wf.connect(motion_sltime_correct, 'out_file',
+                   art, 'realigned_files')
+preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
+                   art, 'mask_file')
+preproc_wf.connect(art, 'norm_files', outputspec, 'artnorm_files')
+preproc_wf.connect(art, 'outlier_files', outputspec, 'artoutlier_files')
+preproc_wf.connect(art, 'displacement_files',
+                   outputspec, 'artdisplacement_files')
+
+# Compute motion regressors (save file with 1st and 2nd derivatives)
+motreg = pe.Node(util.Function(input_names=['motion_params', 'order',
+                                            'derivatives'],
+                               output_names=['out_files'],
+                               function=motion_regressors,
+                               imports=imports),
+                 name='getmotionregress')
+preproc_wf.connect(motion_sltime_correct, 'par_file', motreg, 'motion_params')
+preproc_wf.connect(motreg, 'out_files',
+                   outputspec, 'motion_parameters_plusDerivs')
+
+# Create a filter text file to remove motion (+ derivatives), art confounds,
+# and 1st, 2nd, and 3rd order legendre polynomials.
+createfilter = pe.Node(util.Function(input_names=['motion_params', 'comp_norm',
+                                                  'outliers', 'detrend_poly'],
+                                     output_names=['out_files'],
+                                     function=build_filter,
+                                     imports=imports),
+                        name='makemotionbasedfilter')
+createfilter.inputs.detrend_poly = 3
+preproc_wf.connect(motreg, 'out_files', createfilter, 'motion_params')
+preproc_wf.connect(art, 'norm_files', createfilter, 'comp_norm')
+preproc_wf.connect(art, 'outlier_files', createfilter, 'outliers')
+preproc_wf.connect(createfilter, 'out_files',
+                   outputspec, 'motionandoutlier_noise_file')
 
 # Save the relevant data into an output directory
 datasink = pe.Node(nio.DataSink(), name='datasink')
