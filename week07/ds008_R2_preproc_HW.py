@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from os.path import join, abspath
+from os.path import join, abspath, dirname
 import nipype.pipeline.engine as pe
 import nipype.interfaces.io as nio
 import nipype.interfaces.fsl as fsl
@@ -12,11 +12,12 @@ import nipype.algorithms.rapidart as ra
 
 import sys
 sys.path.append('/scratch/PSB6351_2017/utility_scripts')
-from fs_skullstrip_util import create_freesurfer_skullstrip_workflow
+#from fs_skullstrip_util import create_freesurfer_skullstrip_workflow
 
 import numpy as np
-import scipy as sp
+#import scipy as sp
 import nibabel as nb
+import shutil
 
 imports = ['import os',
            'import nibabel as nb',
@@ -302,7 +303,7 @@ coregister = pe.Node(fs.BBRegister(subjects_dir=subjects_dir,
                                    contrast_type='t2',
                                    init='header',
                                    out_fsl_file=True),
-                        name='coregister')
+                     name='coregister')
 preproc_wf.connect(subj_iterable, 'subject_id', coregister, 'subject_id')
 preproc_wf.connect(motion_correct, ('out_file', pickfirst),
                    coregister, 'source_file')
@@ -310,11 +311,8 @@ preproc_wf.connect(coregister, 'out_reg_file', outputspec, 'reg_file')
 preproc_wf.connect(coregister, 'out_fsl_file', outputspec, 'fsl_reg_file')
 preproc_wf.connect(coregister, 'min_cost_file', outputspec, 'reg_cost')
 
-### EVERYTHING AFTER IS NEW?
-
 # Register a source file to fs space
-fssource = pe.Node(nio.FreeSurferSource(), name ='fssource')
-fssource.inputs.subjects_dir = subjects_dir
+fssource = pe.Node(nio.FreeSurferSource(subjects_dir=subjects_dir), name='fssource')
 preproc_wf.connect(subj_iterable, 'subject_id', fssource, 'subject_id')
 
 # Extract aparc+aseg brain mask and binarize
@@ -324,19 +322,17 @@ preproc_wf.connect(fssource, ('aparc_aseg', get_aparc_aseg),
                    fs_threshold, 'in_file')
 
 # Transform the binarized aparc+aseg file to the 1st volume of 1st run space
-fs_voltransform = pe.MapNode(fs.ApplyVolTransform(inverse=True),
-                             iterfield = ['source_file', 'reg_file'],
+fs_voltransform = pe.MapNode(fs.ApplyVolTransform(inverse=True, subjects_dir=subjects_dir),
+                             iterfield=['source_file', 'reg_file'],
                              name='fs_transform')
-fs_voltransform.inputs.subjects_dir = subjects_dir
 preproc_wf.connect(extractref, 'roi_file', fs_voltransform, 'source_file')
-preproc_wf.connect(fs_register, 'out_reg_file', fs_voltransform, 'reg_file')
+preproc_wf.connect(coregister, 'out_reg_file', fs_voltransform, 'reg_file')
 preproc_wf.connect(fs_threshold, 'binary_file', fs_voltransform, 'target_file')
 
 # Dilate the binarized mask by 1 voxel that is now in the EPI space
-fs_threshold2 = pe.MapNode(fs.Binarize(min=0.5, out_type='nii'),
+fs_threshold2 = pe.MapNode(fs.Binarize(min=0.5, out_type='nii', dilate=1),
                            iterfield=['in_file'],
                            name='fs_threshold2')
-fs_threshold2.inputs.dilate = 1
 preproc_wf.connect(fs_voltransform, 'transformed_file',
                    fs_threshold2, 'in_file')
 preproc_wf.connect(fs_threshold2, 'binary_file', outputspec, 'mask_file')
@@ -346,53 +342,53 @@ maskfunc = pe.MapNode(fsl.ImageMaths(suffix='_bet',
                                      op_string='-mas'),
                       iterfield=['in_file'],
                       name = 'maskfunc')
-preproc_wf.connect(motion_sltime_correct, 'out_file', maskfunc, 'in_file')
+preproc_wf.connect(motion_correct, 'out_file', maskfunc, 'in_file')
 preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                    maskfunc, 'in_file2')
 
-if spatial_smoother == 'fsl_susan_smooth':
-    # Smooth each run using SUSAN with the brightness threshold set to 75%
-    # of the median value for each run and a mask constituting the mean functional
-    smooth_median = pe.MapNode(fsl.ImageStats(op_string='-k %s -p 50'),
-                               iterfield = ['in_file'],
-                               name='smooth_median')
-    preproc_wf.connect(maskfunc, 'out_file', smooth_median, 'in_file')
-    preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
-                       smooth_median, 'mask_file')
-
-    smooth_meanfunc = pe.MapNode(fsl.ImageMaths(op_string='-Tmean',
-                                                suffix='_mean'),
-                                 iterfield=['in_file'],
-                                 name='smooth_meanfunc')
-    preproc_wf.connect(maskfunc, 'out_file', smooth_meanfunc, 'in_file')
-
-    smooth_merge = pe.Node(util.Merge(2, axis='hstack'),
-                           name='smooth_merge')
-    preproc_wf.connect(smooth_meanfunc, 'out_file', smooth_merge, 'in1')
-    preproc_wf.connect(smooth_median, 'out_stat', smooth_merge, 'in2')
-
-    smooth = pe.MapNode(fsl.SUSAN(),
-                        iterfield=['in_file', 'brightness_threshold', 'usans'],
-                        name='smooth')
-    smooth.inputs.fwhm=3.0
-    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
-    preproc_wf.connect(smooth_median, ('out_stat', getbtthresh), smooth, 'brightness_threshold')
-    preproc_wf.connect(smooth_merge, ('out', getusans), smooth, 'usans')
-
-elif spatial_smoother == 'fsl_isotropic_smooth':
-    smooth = pe.MapNode(fsl.Smooth(),
-                        iterfield=['in_file'],
-                        name='smooth')
-    smooth.inputs.fwhm=3.0
-    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
-
-elif spatial_smoother == 'afni_blur2fwhm':
-    smooth = pe.MapNode(afni.preprocess.BlurToFWHM(),
-                        iterfield=['in_file'],
-                        name='smooth')
-    smooth.inputs.fwhm=3.0
-    smooth.inputs.outputtype = 'NIFTI_GZ'
-    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
+#if spatial_smoother == 'fsl_susan_smooth':
+#    # Smooth each run using SUSAN with the brightness threshold set to 75%
+#    # of the median value for each run and a mask constituting the mean functional
+#    smooth_median = pe.MapNode(fsl.ImageStats(op_string='-k %s -p 50'),
+#                               iterfield = ['in_file'],
+#                               name='smooth_median')
+#    preproc_wf.connect(maskfunc, 'out_file', smooth_median, 'in_file')
+#    preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
+#                       smooth_median, 'mask_file')
+#
+#    smooth_meanfunc = pe.MapNode(fsl.ImageMaths(op_string='-Tmean',
+#                                                suffix='_mean'),
+#                                 iterfield=['in_file'],
+#                                 name='smooth_meanfunc')
+#    preproc_wf.connect(maskfunc, 'out_file', smooth_meanfunc, 'in_file')
+#
+#    smooth_merge = pe.Node(util.Merge(2, axis='hstack'),
+#                           name='smooth_merge')
+#    preproc_wf.connect(smooth_meanfunc, 'out_file', smooth_merge, 'in1')
+#    preproc_wf.connect(smooth_median, 'out_stat', smooth_merge, 'in2')
+#
+#    smooth = pe.MapNode(fsl.SUSAN(),
+#                        iterfield=['in_file', 'brightness_threshold', 'usans'],
+#                        name='smooth')
+#    smooth.inputs.fwhm=3.0
+#    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
+#    preproc_wf.connect(smooth_median, ('out_stat', getbtthresh), smooth, 'brightness_threshold')
+#    preproc_wf.connect(smooth_merge, ('out', getusans), smooth, 'usans')
+#
+#elif spatial_smoother == 'fsl_isotropic_smooth':
+#    smooth = pe.MapNode(fsl.Smooth(),
+#                        iterfield=['in_file'],
+#                        name='smooth')
+#    smooth.inputs.fwhm=3.0
+#    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
+#
+#elif spatial_smoother == 'afni_blur2fwhm':
+#    smooth = pe.MapNode(afni.preprocess.BlurToFWHM(),
+#                        iterfield=['in_file'],
+#                        name='smooth')
+#    smooth.inputs.fwhm=3.0
+#    smooth.inputs.outputtype = 'NIFTI_GZ'
+#    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
 
 kernel_values = range(3, 13, 3)
 afni_smooth = [[] for _ in range(len(kernel_values))]
@@ -440,7 +436,7 @@ for i, kernel in enumerate(kernel_values):
                                           op_string='-mas'),
                            iterfield=['in_file'],
                            name='susan_mask_{0}'.format(kernel))
-    preproc_wf.connect(smooth, 'out_file', maskfunc2, 'in_file')
+    preproc_wf.connect(susan_smooth[i], 'out_file', maskfunc2, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc2, 'in_file2')
     preproc_wf.connect(maskfunc2, 'out_file',
@@ -458,7 +454,7 @@ for i, kernel in enumerate(kernel_values):
                                           op_string='-mas'),
                            iterfield=['in_file'],
                            name='fsl_mask_{0}'.format(kernel))
-    preproc_wf.connect(smooth, 'out_file', maskfunc2, 'in_file')
+    preproc_wf.connect(fsl_smooth[i], 'out_file', maskfunc2, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc2, 'in_file2')
     preproc_wf.connect(maskfunc2, 'out_file',
@@ -477,12 +473,14 @@ for i, kernel in enumerate(kernel_values):
                                           op_string='-mas'),
                            iterfield=['in_file'],
                            name='afni_mask_{0}'.format(kernel))
-    preproc_wf.connect(smooth, 'out_file', maskfunc2, 'in_file')
+    preproc_wf.connect(afni_smooth[i], 'out_file', maskfunc2, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc2, 'in_file2')
     preproc_wf.connect(maskfunc2, 'out_file',
                        outputspec, 'afni_{0}_smoothed_files'.format(kernel))
 
+preproc_wf.write_graph(graph2use='flat')
+raise Exception()
 # Use RapidART to detect motion/intensity outliers
 art = pe.MapNode(ra.ArtifactDetect(use_differences=[True, False],
                                    use_norm=True,
@@ -539,8 +537,8 @@ if temporal_filterer is 'use_fsl_bp':
                                                 function=calc_fslbp_sigmas),
                                   name='determine_bp_sigmas')
     determine_bp_sigmas.inputs.tr = 2.0
-    determine_bp_sigmas.inputs.highpass_freq = #YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
-    determine_bp_sigmas.inputs.lowpass_freq = #YOU NEED TO SET THIS. WHAT VALUES MAKE SENSE? SECONDS? HZ?
+    determine_bp_sigmas.inputs.highpass_freq = .2#YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
+    determine_bp_sigmas.inputs.lowpass_freq = .2#YOU NEED TO SET THIS. WHAT VALUES MAKE SENSE? SECONDS? HZ?
 
     bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
                           iterfield=['in_file'],
@@ -577,8 +575,8 @@ elif temporal_filterer is 'use_np_bp':
                                      imports=imports),
                        name='bandpass')
     bandpass.inputs.fs = 1. / 2.
-    bandpass.inputs.highpass_freq = #YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
-    bandpass.inputs.lowpass_freq = #YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
+    bandpass.inputs.highpass_freq = .2#YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
+    bandpass.inputs.lowpass_freq = .2#YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
     preproc_wf.connect(maskfunc2, 'out_file', bandpass, 'files')
     preproc_wf.connect(bandpass, 'out_files', outputspec, 'bandpassed_files')
 
