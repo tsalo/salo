@@ -181,14 +181,15 @@ def getusans(inlist):
 
 def calc_fslbp_sigmas(tr, highpass_freq, lowpass_freq):
     """Return the highpass and lowpass sigmas for fslmaths -bptf filter."""
-    if highpass_freq < 0:
+    if highpass_freq <= 0:
         highpass_sig = -1
     else:
-        highpass_sig = 1 / (2 * tr * highpass_freq)
-    if lowpass_freq < 0:
+        highpass_sig = 1. / (2. * tr * highpass_freq)
+    
+    if lowpass_freq <= 0:
         lowpass_sig = -1
     else:
-        lowpass_sig = 1 / (2 * tr * lowpass_freq)
+        lowpass_sig = 1. / (2. * tr * lowpass_freq)
     return highpass_sig, lowpass_sig
 
 
@@ -234,11 +235,19 @@ output_fields = ['reference',
                  'reg_file',
                  'reg_cost',
                  'reg_fsl_file',
-                 'smoothed_files',
-                 'bandpassed_files',
                  'artnorm_files',
                  'artoutlier_files',
                  'artdisplacement_files']
+
+kernel_values = range(3, 13, 3)
+for k in kernel_values:
+    for sm in ['afni', 'susan', 'fsl']:
+        sm_files = '{0}_sm{1}_files'.format(sm, k)
+        output_fields.append(sm_files)
+        for bp in ['afni', 'fsl', 'nipype']:
+            bp_files = '{0}_bp_{1}_sm{2}_files'.format(bp, sm, k)
+            output_fields.append(bp_files)
+
 outputspec = pe.Node(util.IdentityInterface(fields=output_fields),
                      name='outputspec')
 
@@ -343,51 +352,64 @@ preproc_wf.connect(motion_correct, 'out_file', maskfunc, 'in_file')
 preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                    maskfunc, 'in_file2')
 
-#if spatial_smoother == 'fsl_susan_smooth':
-#    # Smooth each run using SUSAN with the brightness threshold set to 75%
-#    # of the median value for each run and a mask constituting the mean functional
-#    smooth_median = pe.MapNode(fsl.ImageStats(op_string='-k %s -p 50'),
-#                               iterfield = ['in_file'],
-#                               name='smooth_median')
-#    preproc_wf.connect(maskfunc, 'out_file', smooth_median, 'in_file')
-#    preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
-#                       smooth_median, 'mask_file')
-#
-#    smooth_meanfunc = pe.MapNode(fsl.ImageMaths(op_string='-Tmean',
-#                                                suffix='_mean'),
-#                                 iterfield=['in_file'],
-#                                 name='smooth_meanfunc')
-#    preproc_wf.connect(maskfunc, 'out_file', smooth_meanfunc, 'in_file')
-#
-#    smooth_merge = pe.Node(util.Merge(2, axis='hstack'),
-#                           name='smooth_merge')
-#    preproc_wf.connect(smooth_meanfunc, 'out_file', smooth_merge, 'in1')
-#    preproc_wf.connect(smooth_median, 'out_stat', smooth_merge, 'in2')
-#
-#    smooth = pe.MapNode(fsl.SUSAN(),
-#                        iterfield=['in_file', 'brightness_threshold', 'usans'],
-#                        name='smooth')
-#    smooth.inputs.fwhm=3.0
-#    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
-#    preproc_wf.connect(smooth_median, ('out_stat', getbtthresh), smooth, 'brightness_threshold')
-#    preproc_wf.connect(smooth_merge, ('out', getusans), smooth, 'usans')
-#
-#elif spatial_smoother == 'fsl_isotropic_smooth':
-#    smooth = pe.MapNode(fsl.Smooth(),
-#                        iterfield=['in_file'],
-#                        name='smooth')
-#    smooth.inputs.fwhm=3.0
-#    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
-#
-#elif spatial_smoother == 'afni_blur2fwhm':
-#    smooth = pe.MapNode(afni.preprocess.BlurToFWHM(),
-#                        iterfield=['in_file'],
-#                        name='smooth')
-#    smooth.inputs.fwhm=3.0
-#    smooth.inputs.outputtype = 'NIFTI_GZ'
-#    preproc_wf.connect(maskfunc, 'out_file', smooth, 'in_file')
+# Use RapidART to detect motion/intensity outliers
+art = pe.MapNode(ra.ArtifactDetect(use_differences=[True, False],
+                                   use_norm=True,
+                                   zintensity_threshold=3,
+                                   norm_threshold=1,
+                                   bound_by_brainmask=True,
+                                   mask_type='file'),
+                 iterfield=['realignment_parameters', 'realigned_files'],
+                 name='art')
+art.inputs.parameter_source = 'NiPy'
+preproc_wf.connect(motion_correct, 'par_file',
+                   art, 'realignment_parameters')
+preproc_wf.connect(motion_correct, 'out_file',
+                   art, 'realigned_files')
+preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
+                   art, 'mask_file')
+preproc_wf.connect(art, 'norm_files', outputspec, 'artnorm_files')
+preproc_wf.connect(art, 'outlier_files', outputspec, 'artoutlier_files')
+preproc_wf.connect(art, 'displacement_files',
+                   outputspec, 'artdisplacement_files')
 
-kernel_values = range(3, 13, 3)
+# Compute motion regressors (save file with 1st and 2nd derivatives)
+motreg = pe.Node(util.Function(input_names=['motion_params', 'order',
+                                            'derivatives'],
+                               output_names=['out_files'],
+                               function=motion_regressors,
+                               imports=imports),
+                 name='getmotionregress')
+preproc_wf.connect(motion_correct, 'par_file', motreg, 'motion_params')
+preproc_wf.connect(motreg, 'out_files',
+                   outputspec, 'motion_parameters_plusDerivs')
+
+# Create a filter text file to remove motion (+ derivatives), art confounds,
+# and 1st, 2nd, and 3rd order legendre polynomials.
+createfilter = pe.Node(util.Function(input_names=['motion_params', 'comp_norm',
+                                                  'outliers', 'detrend_poly'],
+                                     output_names=['out_files'],
+                                     function=build_filter,
+                                     imports=imports),
+                        name='makemotionbasedfilter')
+createfilter.inputs.detrend_poly = 3
+preproc_wf.connect(motreg, 'out_files', createfilter, 'motion_params')
+preproc_wf.connect(art, 'norm_files', createfilter, 'comp_norm')
+preproc_wf.connect(art, 'outlier_files', createfilter, 'outliers')
+preproc_wf.connect(createfilter, 'out_files',
+                   outputspec, 'motionandoutlier_noise_file')
+
+# Prepare for smoothing and bandpass filtering.
+determine_bp_sigmas = pe.Node(util.Function(input_names=['tr',
+                                                         'highpass_freq',
+                                                         'lowpass_freq'],
+                                            output_names = ['out_sigmas'],
+                                            function=calc_fslbp_sigmas),
+                              name='determine_bp_sigmas')
+determine_bp_sigmas.inputs.tr = 2.0
+determine_bp_sigmas.inputs.highpass_freq = 125.
+determine_bp_sigmas.inputs.lowpass_freq = -1
+
 afni_smooth = [[] for _ in range(len(kernel_values))]
 susan_smooth = [[] for _ in range(len(kernel_values))]
 smooth_median = [[] for _ in range(len(kernel_values))]
@@ -395,7 +417,11 @@ smooth_meanfunc = [[] for _ in range(len(kernel_values))]
 smooth_merge = [[] for _ in range(len(kernel_values))]
 fsl_smooth = [[] for _ in range(len(kernel_values))]
 for i, kernel in enumerate(kernel_values):
-    # SUSAN Smoothing
+    #
+    #
+    ### SUSAN Smoothing
+    #
+    #
     # Smooth each run using SUSAN with the brightness threshold set to 75%
     # of the median value for each run and a mask constituting the mean
     # functional
@@ -437,9 +463,47 @@ for i, kernel in enumerate(kernel_values):
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc2, 'in_file2')
     preproc_wf.connect(maskfunc2, 'out_file',
-                       outputspec, 'susan_{0}_smoothed_files'.format(kernel))
+                       outputspec, 'susan_sm{0}_files'.format(kernel))
     
-    # FSL Smoothing
+    # Temporal smoothing for SUSAN-smoothed data
+    # FSL bandpass
+    fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
+                              iterfield=['in_file'],
+                              name='fsl_bandpass')
+    preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
+                       fsl_bandpass, 'op_string')
+    preproc_wf.connect(maskfunc2, 'out_file', fsl_bandpass, 'in_file')
+    preproc_wf.connect(fsl_bandpass, 'out_file',
+                       outputspec, 'fsl_bp_susan_sm{0}_files'.format(kernel))
+
+    # AFNI bandpass
+    afni_detrend = pe.MapNode(afni.Detrend(outtype='NIFTI_GZ'),
+                         iterfield=['in_file'],
+                         name='afni_detrend')
+    preproc_wf.connect(maskfunc2, 'out_file', afni_detrend, 'in_file')
+    preproc_wf.connect(afni_detrend, 'out_file',
+                       outputspec, 'afni_bp_susan_sm{0}_files'.format(kernel))
+
+    # Nipype bandpass
+    nipype_bandpass = pe.Node(util.Function(input_names=['files',
+                                                  'lowpass_freq',
+                                                  'highpass_freq',
+                                                  'fs'],
+                                     output_names=['out_files'],
+                                     function=bandpass_filter,
+                                     imports=imports),
+                       name='nipype_bandpass')
+    nipype_bandpass.inputs.fs = 1. / 2.
+    nipype_bandpass.inputs.highpass_freq = .008
+    nipype_bandpass.inputs.lowpass_freq = 0.
+    preproc_wf.connect(maskfunc2, 'out_file', nipype_bandpass, 'files')
+    preproc_wf.connect(nipype_bandpass, 'out_files',
+                       outputspec, 'nipype_bp_susan_sm{0}_files'.format(kernel))
+    #
+    #
+    ### FSL Smoothing
+    #
+    #
     fsl_smooth[i] = pe.MapNode(fsl.Smooth(),
                                iterfield=['in_file'],
                                name='fsl_smooth_{0}'.format(kernel))
@@ -447,17 +511,56 @@ for i, kernel in enumerate(kernel_values):
     preproc_wf.connect(maskfunc, 'out_file', fsl_smooth[i], 'in_file')
     
     # Mask the smoothed data with the dilated mask
-    maskfunc2 = pe.MapNode(fsl.ImageMaths(suffix='_mask',
+    maskfunc3 = pe.MapNode(fsl.ImageMaths(suffix='_mask',
                                           op_string='-mas'),
                            iterfield=['in_file'],
                            name='fsl_mask_{0}'.format(kernel))
-    preproc_wf.connect(fsl_smooth[i], 'smoothed_file', maskfunc2, 'in_file')
+    preproc_wf.connect(fsl_smooth[i], 'smoothed_file', maskfunc3, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
-                       maskfunc2, 'in_file2')
-    preproc_wf.connect(maskfunc2, 'out_file',
-                       outputspec, 'fsl_{0}_smoothed_files'.format(kernel))
+                       maskfunc3, 'in_file2')
+    preproc_wf.connect(maskfunc3, 'out_file',
+                       outputspec, 'fsl_sm{0}_files'.format(kernel))
     
-    # AFNI Smoothing
+    # Temporal smoothing for FSL-smoothed data
+    # FSL bandpass
+    fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
+                              iterfield=['in_file'],
+                              name='fsl_bandpass')
+    preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
+                       fsl_bandpass, 'op_string')
+    preproc_wf.connect(maskfunc3, 'out_file', fsl_bandpass, 'in_file')
+    preproc_wf.connect(fsl_bandpass, 'out_file',
+                       outputspec, 'fsl_bp_fsl_sm{0}_files'.format(kernel))
+
+    # AFNI bandpass
+    afni_detrend = pe.MapNode(afni.Detrend(outtype='NIFTI_GZ'),
+                              iterfield=['in_file'],
+                              name='afni_detrend')
+    preproc_wf.connect(maskfunc3, 'out_file', afni_detrend, 'in_file')
+    preproc_wf.connect(afni_detrend, 'out_file',
+                       outputspec, 'afni_bp_fsl_sm{0}_files'.format(kernel))
+
+    # Nipype bandpass
+    nipype_bandpass = pe.Node(util.Function(input_names=['files',
+                                                  'lowpass_freq',
+                                                  'highpass_freq',
+                                                  'fs'],
+                                     output_names=['out_files'],
+                                     function=bandpass_filter,
+                                     imports=imports),
+                       name='nipype_bandpass')
+    nipype_bandpass.inputs.fs = 1. / 2.
+    nipype_bandpass.inputs.highpass_freq = .008
+    nipype_bandpass.inputs.lowpass_freq = 0.
+    preproc_wf.connect(maskfunc3, 'out_file', nipype_bandpass, 'files')
+    preproc_wf.connect(nipype_bandpass, 'out_files',
+                       outputspec, 'nipype_bp_fsl_sm{0}_files'.format(kernel))
+    
+    #
+    #
+    ### AFNI Smoothing
+    #
+    #
     afni_smooth[i] = pe.MapNode(afni.preprocess.BlurToFWHM(fwhm=float(kernel),
                                                            outputtype='NIFTI_GZ'),
                                 iterfield=['in_file'],
@@ -465,121 +568,65 @@ for i, kernel in enumerate(kernel_values):
     preproc_wf.connect(maskfunc, 'out_file', afni_smooth[i], 'in_file')
 
     # Mask the smoothed data with the dilated mask
-    maskfunc2 = pe.MapNode(fsl.ImageMaths(suffix='_mask',
+    maskfunc4 = pe.MapNode(fsl.ImageMaths(suffix='_mask',
                                           op_string='-mas'),
                            iterfield=['in_file'],
                            name='afni_mask_{0}'.format(kernel))
-    preproc_wf.connect(afni_smooth[i], 'out_file', maskfunc2, 'in_file')
+    preproc_wf.connect(afni_smooth[i], 'out_file', maskfunc4, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
-                       maskfunc2, 'in_file2')
-    preproc_wf.connect(maskfunc2, 'out_file',
-                       outputspec, 'afni_{0}_smoothed_files'.format(kernel))
+                       maskfunc4, 'in_file2')
+    preproc_wf.connect(maskfunc4, 'out_file',
+                       outputspec, 'afni_sm{0}_files'.format(kernel))
 
-preproc_wf.write_graph(graph2use='flat')
-
-
-# Band-pass filter the timeseries
-if temporal_filterer is 'use_fsl_bp':
-    determine_bp_sigmas = pe.Node(util.Function(input_names=['tr',
-                                                             'highpass_freq',
-                                                             'lowpass_freq'],
-                                                output_names = ['out_sigmas'],
-                                                function=calc_fslbp_sigmas),
-                                  name='determine_bp_sigmas')
-    determine_bp_sigmas.inputs.tr = 2.0
-    determine_bp_sigmas.inputs.highpass_freq = .2#YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
-    determine_bp_sigmas.inputs.lowpass_freq = .2#YOU NEED TO SET THIS. WHAT VALUES MAKE SENSE? SECONDS? HZ?
-
-    bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
-                          iterfield=['in_file'],
-                          name='bandpass')
+    # Temporal smoothing for AFNI-smoothed data
+    # FSL bandpass
+    fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
+                              iterfield=['in_file'],
+                              name='fsl_bandpass')
     preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
-                       bandpass, 'op_string')
-    preproc_wf.connect(maskfunc2, 'out_file', bandpass, 'in_file')
-    preproc_wf.connect(bandpass, 'out_file', outputspec, 'bandpassed_files')
-elif temporal_filterer is 'use_afni_bp':
-    # WHY WON'T THIS WORK?
-    # HOW DOES AFNI HANDLE LOW FREQUENCY NOISE?
-    #bandpass = pe.MapNode(afni.Bandpass(),
-    #                      iterfield=['in_file'],
-    #                      name = 'bandpass')
-    #bandpass.inputs.highpass = 0
-    #bandpass.inputs.lowpass = 0.007
-    #preproc_wf.connect(maskfunc2, 'out_file', bandpass, 'in_file')
-    #preproc_wf.connect(bandpass, 'out_file', outputspec, 'bandpassed_files')
+                       fsl_bandpass, 'op_string')
+    preproc_wf.connect(maskfunc4, 'out_file', fsl_bandpass, 'in_file')
+    preproc_wf.connect(fsl_bandpass, 'out_file',
+                       outputspec, 'fsl_bp_afni_sm{0}_files'.format(kernel))
 
-    detrend = pe.MapNode(afni.Detrend(),
+    # AFNI bandpass
+    afni_detrend = pe.MapNode(afni.Detrend(outtype='NIFTI_GZ'),
                          iterfield=['in_file'],
-                         name='detrend')
-    detrend.inputs.args = '-polort 4'
-    detrend.inputs.outtype = 'NIFTI_GZ'
-    preproc_wf.connect(maskfunc2, 'out_file', detrend, 'in_file')
-    preproc_wf.connect(detrend, 'out_file', outputspec, 'bandpassed_files')
-elif temporal_filterer is 'use_np_bp':
-    bandpass = pe.Node(util.Function(input_names=['files',
+                         name='afni_detrend')
+    preproc_wf.connect(maskfunc4, 'out_file', afni_detrend, 'in_file')
+    preproc_wf.connect(afni_detrend, 'out_file',
+                       outputspec, 'afni_bp_afni_sm{0}_files'.format(kernel))
+
+    # Nipype bandpass
+    nipype_bandpass = pe.Node(util.Function(input_names=['files',
                                                   'lowpass_freq',
                                                   'highpass_freq',
                                                   'fs'],
                                      output_names=['out_files'],
                                      function=bandpass_filter,
                                      imports=imports),
-                       name='bandpass')
-    bandpass.inputs.fs = 1. / 2.
-    bandpass.inputs.highpass_freq = .2#YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
-    bandpass.inputs.lowpass_freq = .2#YOU NEED TO SET THIS.  WHAT VALUES MAKE SENSE? SECONDS? HZ?
-    preproc_wf.connect(maskfunc2, 'out_file', bandpass, 'files')
-    preproc_wf.connect(bandpass, 'out_files', outputspec, 'bandpassed_files')
-
-# Use RapidART to detect motion/intensity outliers
-art = pe.MapNode(ra.ArtifactDetect(use_differences=[True, False],
-                                   use_norm=True,
-                                   zintensity_threshold=3,
-                                   norm_threshold=1,
-                                   bound_by_brainmask=True,
-                                   mask_type='file'),
-                 iterfield=['realignment_parameters', 'realigned_files'],
-                 name='art')
-art.inputs.parameter_source = 'NiPy'
-preproc_wf.connect(motion_sltime_correct, 'par_file',
-                   art, 'realignment_parameters')
-preproc_wf.connect(motion_sltime_correct, 'out_file',
-                   art, 'realigned_files')
-preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
-                   art, 'mask_file')
-preproc_wf.connect(art, 'norm_files', outputspec, 'artnorm_files')
-preproc_wf.connect(art, 'outlier_files', outputspec, 'artoutlier_files')
-preproc_wf.connect(art, 'displacement_files',
-                   outputspec, 'artdisplacement_files')
-
-# Compute motion regressors (save file with 1st and 2nd derivatives)
-motreg = pe.Node(util.Function(input_names=['motion_params', 'order',
-                                            'derivatives'],
-                               output_names=['out_files'],
-                               function=motion_regressors,
-                               imports=imports),
-                 name='getmotionregress')
-preproc_wf.connect(motion_sltime_correct, 'par_file', motreg, 'motion_params')
-preproc_wf.connect(motreg, 'out_files',
-                   outputspec, 'motion_parameters_plusDerivs')
-
-# Create a filter text file to remove motion (+ derivatives), art confounds,
-# and 1st, 2nd, and 3rd order legendre polynomials.
-createfilter = pe.Node(util.Function(input_names=['motion_params', 'comp_norm',
-                                                  'outliers', 'detrend_poly'],
-                                     output_names=['out_files'],
-                                     function=build_filter,
-                                     imports=imports),
-                        name='makemotionbasedfilter')
-createfilter.inputs.detrend_poly = 3
-preproc_wf.connect(motreg, 'out_files', createfilter, 'motion_params')
-preproc_wf.connect(art, 'norm_files', createfilter, 'comp_norm')
-preproc_wf.connect(art, 'outlier_files', createfilter, 'outliers')
-preproc_wf.connect(createfilter, 'out_files',
-                   outputspec, 'motionandoutlier_noise_file')
+                       name='nipype_bandpass')
+    nipype_bandpass.inputs.fs = 1. / 2.
+    nipype_bandpass.inputs.highpass_freq = .008
+    nipype_bandpass.inputs.lowpass_freq = 0.
+    preproc_wf.connect(maskfunc4, 'out_file', nipype_bandpass, 'files')
+    preproc_wf.connect(nipype_bandpass, 'out_files',
+                       outputspec, 'nipype_bp_afni_sm{0}_files'.format(kernel))
 
 # Save the relevant data into an output directory
 datasink = pe.Node(nio.DataSink(), name='datasink')
 datasink.inputs.base_directory = out_dir
+
+for k in kernel_values:
+    for sm in ['afni', 'susan', 'fsl']:
+        sm_files = '{0}_sm{1}_files'.format(sm, k)
+        preproc_wf.connect(outputspec, sm_files,
+                           datasink, 'preproc.func.smoothed.@{0}'.format(sm_files))
+        for bp in ['afni', 'fsl', 'nipype']:
+            bp_files = '{0}_bp_{1}_sm{2}_files'.format(bp, sm, k)
+            preproc_wf.connect(outputspec, bp_files, datasink,
+                               'preproc.func.smoothed_highpassed.@{0}'.format(bp_files))
+
 preproc_wf.connect(subj_iterable, 'subject_id', datasink, 'container')
 preproc_wf.connect(outputspec, 'reference', datasink, 'preproc.ref')
 preproc_wf.connect(outputspec, 'motion_parameters',
@@ -604,13 +651,11 @@ preproc_wf.connect(outputspec, 'motion_parameters_plusDerivs',
 preproc_wf.connect(outputspec, 'motionandoutlier_noise_file',
                    datasink, 'preproc.noise.@motionplusoutliers')
 preproc_wf.connect(outputspec, 'mask_file', datasink, 'preproc.ref.@mask')
-preproc_wf.connect(outputspec, 'smoothed_files',
-                   datasink, 'preproc.func.smoothed_fullspectrum')
-preproc_wf.connect(outputspec, 'bandpassed_files',
-                   datasink, 'preproc.func.smoothed_highpassed')
 
 # Create and copy graphs to output directory for easy access.
-preproc_wf.write_graph(graph2use='flat')
+#preproc_wf.write_graph(graph2use='flat')
+preproc_wf.write_graph(graph2use='exec')
+raise Exception()
 
 shutil.copy(join(preproc_wf.base_dir, preproc_wf.name, 'graph_detailed.dot.png'),
             join(diagram_dir, 'pipeline_graph_detailed.png'))
