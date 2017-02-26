@@ -9,6 +9,7 @@ import nipype.interfaces.nipy as nipy
 import nipype.interfaces.afni as afni
 import nipype.interfaces.freesurfer as fs
 import nipype.interfaces.utility as util  
+import nipype.algorithms.confounds as conf
 import nipype.algorithms.rapidart as ra
 
 import numpy as np
@@ -55,8 +56,8 @@ def get_subs(subject_id, mri_files):
     subs = []
     subs.append(('_subject_id_%s/' %subject_id, ''))
     for i, mri_file in enumerate(mri_files):
-        subs.append(('_motion_sltime_correct%d/' %i, ''))
         subs.append(('_motion_correct%d/' %i, ''))
+        subs.append(('_art%d/' %i, ''))
     return subs
 
 
@@ -215,10 +216,9 @@ err_dir = join(salo_dir, 'crash/week07/')
 spatial_smoothers = ['afni_blur2fwhm']
 temporal_filterers = ['use_np_bp']
 
-sids = ['sub-01']
-#sids = ['sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05',
-#        'sub-06', 'sub-07', 'sub-09', 'sub-10',
-#        'sub-11', 'sub-12', 'sub-13', 'sub-14', 'sub-15']
+sids = ['sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05',
+        'sub-06', 'sub-07', 'sub-09', 'sub-10',
+        'sub-11', 'sub-12', 'sub-13', 'sub-14', 'sub-15']
 
 # Workflow
 preproc_wf = pe.Workflow('preproc_wf')
@@ -247,6 +247,8 @@ for k in kernel_values:
         for bp in ['afni', 'fsl', 'nipype']:
             bp_files = '{0}_bp_{1}_sm{2}_files'.format(bp, sm, k)
             output_fields.append(bp_files)
+            tsnr_files = '{0}_bp_{1}_sm{2}_tsnr_files'.format(bp, sm, k)
+            output_fields.append(tsnr_files)
 
 outputspec = pe.Node(util.IdentityInterface(fields=output_fields),
                      name='outputspec')
@@ -469,20 +471,33 @@ for i, kernel in enumerate(kernel_values):
     # FSL bandpass
     fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
                               iterfield=['in_file'],
-                              name='fsl_bp_susan_sm{0}'.format(kernel))
+                              name='fsl_bp_susan_sm{0}_'.format(kernel))
     preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
                        fsl_bandpass, 'op_string')
     preproc_wf.connect(maskfunc2, 'out_file', fsl_bandpass, 'in_file')
     preproc_wf.connect(fsl_bandpass, 'out_file',
                        outputspec, 'fsl_bp_susan_sm{0}_files'.format(kernel))
+    
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='fsl_bp_susan_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(fsl_bandpass, 'out_file', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'fsl_bp_susan_sm{0}_tsnr_files'.format(kernel))
 
     # AFNI bandpass
-    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ'),
+    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ',
+                                           args='-polort 4'),
                          iterfield=['in_file'],
-                         name='afni_bp_susan_sm{0}'.format(kernel))
+                         name='afni_bp_susan_sm{0}_'.format(kernel))
     preproc_wf.connect(maskfunc2, 'out_file', afni_detrend, 'in_file')
     preproc_wf.connect(afni_detrend, 'out_file',
                        outputspec, 'afni_bp_susan_sm{0}_files'.format(kernel))
+    
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='afni_bp_susan_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(afni_detrend, 'out_file', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'afni_bp_susan_sm{0}_tsnr_files'.format(kernel))
 
     # Nipype bandpass
     nipype_bandpass = pe.Node(util.Function(input_names=['files',
@@ -492,13 +507,20 @@ for i, kernel in enumerate(kernel_values):
                                      output_names=['out_files'],
                                      function=bandpass_filter,
                                      imports=imports),
-                       name='nipype_bp_susan_sm{0}'.format(kernel))
+                       name='nipype_bp_susan_sm{0}_'.format(kernel))
     nipype_bandpass.inputs.fs = 1. / 2.
     nipype_bandpass.inputs.highpass_freq = .008
     nipype_bandpass.inputs.lowpass_freq = 0.
     preproc_wf.connect(maskfunc2, 'out_file', nipype_bandpass, 'files')
     preproc_wf.connect(nipype_bandpass, 'out_files',
                        outputspec, 'nipype_bp_susan_sm{0}_files'.format(kernel))
+    
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='nipype_bp_susan_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(nipype_bandpass, 'out_files', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'nipype_bp_susan_sm{0}_tsnr_files'.format(kernel))
+    
     #
     #
     ### FSL Smoothing
@@ -525,20 +547,33 @@ for i, kernel in enumerate(kernel_values):
     # FSL bandpass
     fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
                               iterfield=['in_file'],
-                              name='fsl_bp_fsl_sm{0}'.format(kernel))
+                              name='fsl_bp_fsl_sm{0}_'.format(kernel))
     preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
                        fsl_bandpass, 'op_string')
     preproc_wf.connect(maskfunc3, 'out_file', fsl_bandpass, 'in_file')
     preproc_wf.connect(fsl_bandpass, 'out_file',
                        outputspec, 'fsl_bp_fsl_sm{0}_files'.format(kernel))
+    
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='fsl_bp_fsl_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(fsl_bandpass, 'out_file', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'fsl_bp_fsl_sm{0}_tsnr_files'.format(kernel))
 
     # AFNI bandpass
-    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ'),
+    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ',
+                                           args='-polort 4'),
                               iterfield=['in_file'],
-                              name='afni_bp_fsl_sm{0}'.format(kernel))
+                              name='afni_bp_fsl_sm{0}_'.format(kernel))
     preproc_wf.connect(maskfunc3, 'out_file', afni_detrend, 'in_file')
     preproc_wf.connect(afni_detrend, 'out_file',
                        outputspec, 'afni_bp_fsl_sm{0}_files'.format(kernel))
+
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='afni_bp_fsl_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(afni_detrend, 'out_file', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'afni_bp_fsl_sm{0}_tsnr_files'.format(kernel))
 
     # Nipype bandpass
     nipype_bandpass = pe.Node(util.Function(input_names=['files',
@@ -548,13 +583,19 @@ for i, kernel in enumerate(kernel_values):
                                      output_names=['out_files'],
                                      function=bandpass_filter,
                                      imports=imports),
-                       name='nipype_bp_fsl_sm{0}'.format(kernel))
+                       name='nipype_bp_fsl_sm{0}_'.format(kernel))
     nipype_bandpass.inputs.fs = 1. / 2.
     nipype_bandpass.inputs.highpass_freq = .008
     nipype_bandpass.inputs.lowpass_freq = 0.
     preproc_wf.connect(maskfunc3, 'out_file', nipype_bandpass, 'files')
     preproc_wf.connect(nipype_bandpass, 'out_files',
                        outputspec, 'nipype_bp_fsl_sm{0}_files'.format(kernel))
+    
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='nipype_bp_fsl_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(nipype_bandpass, 'out_files', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'nipype_bp_fsl_sm{0}_tsnr_files'.format(kernel))
     
     #
     #
@@ -582,20 +623,33 @@ for i, kernel in enumerate(kernel_values):
     # FSL bandpass
     fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
                               iterfield=['in_file'],
-                              name='fsl_bp_afni_sm{0}'.format(kernel))
+                              name='fsl_bp_afni_sm{0}_'.format(kernel))
     preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
                        fsl_bandpass, 'op_string')
     preproc_wf.connect(maskfunc4, 'out_file', fsl_bandpass, 'in_file')
     preproc_wf.connect(fsl_bandpass, 'out_file',
                        outputspec, 'fsl_bp_afni_sm{0}_files'.format(kernel))
 
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='fsl_bp_afni_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(fsl_bandpass, 'out_file', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'fsl_bp_afni_sm{0}_tsnr_files'.format(kernel))
+
     # AFNI bandpass
-    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ'),
+    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ',
+                                           args='-polort 4'),
                          iterfield=['in_file'],
-                         name='afni_bp_afni_sm{0}'.format(kernel))
+                         name='afni_bp_afni_sm{0}_'.format(kernel))
     preproc_wf.connect(maskfunc4, 'out_file', afni_detrend, 'in_file')
     preproc_wf.connect(afni_detrend, 'out_file',
                        outputspec, 'afni_bp_afni_sm{0}_files'.format(kernel))
+
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='afni_bp_afni_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(afni_detrend, 'out_file', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'afni_bp_afni_sm{0}_tsnr_files'.format(kernel))
 
     # Nipype bandpass
     nipype_bandpass = pe.Node(util.Function(input_names=['files',
@@ -605,13 +659,19 @@ for i, kernel in enumerate(kernel_values):
                                      output_names=['out_files'],
                                      function=bandpass_filter,
                                      imports=imports),
-                       name='nipype_bp_afni_sm{0}'.format(kernel))
+                       name='nipype_bp_afni_sm{0}_'.format(kernel))
     nipype_bandpass.inputs.fs = 1. / 2.
     nipype_bandpass.inputs.highpass_freq = .008
     nipype_bandpass.inputs.lowpass_freq = 0.
     preproc_wf.connect(maskfunc4, 'out_file', nipype_bandpass, 'files')
     preproc_wf.connect(nipype_bandpass, 'out_files',
                        outputspec, 'nipype_bp_afni_sm{0}_files'.format(kernel))
+    
+    tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
+                      name='nipype_bp_afni_sm{0}_tsnr_files'.format(kernel))
+    preproc_wf.connect(nipype_bandpass, 'out_files', tsnr, 'in_file')
+    preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
+                       'nipype_bp_afni_sm{0}_tsnr_files'.format(kernel))
 
 # Save the relevant data into an output directory
 datasink = pe.Node(nio.DataSink(), name='datasink')
@@ -624,8 +684,11 @@ for k in kernel_values:
                            datasink, 'preproc.func.smoothed.@{0}'.format(sm_files))
         for bp in ['afni', 'fsl', 'nipype']:
             bp_files = '{0}_bp_{1}_sm{2}_files'.format(bp, sm, k)
+            tsnr_files = '{0}_bp_{1}_sm{2}_tsnr_files'.format(bp, sm, k)
             preproc_wf.connect(outputspec, bp_files, datasink,
                                'preproc.func.smoothed_highpassed.@{0}'.format(bp_files))
+            preproc_wf.connect(outputspec, tsnr_files, datasink,
+                               'preproc.func.tsnr.@{0}'.format(tsnr_files))
 
 preproc_wf.connect(subj_iterable, 'subject_id', datasink, 'container')
 preproc_wf.connect(outputspec, 'reference', datasink, 'preproc.ref')
