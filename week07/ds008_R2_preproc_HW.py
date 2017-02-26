@@ -469,7 +469,7 @@ for i, kernel in enumerate(kernel_values):
     # FSL bandpass
     fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
                               iterfield=['in_file'],
-                              name='fsl_bandpass')
+                              name='fsl_bp_susan_sm{0}'.format(kernel))
     preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
                        fsl_bandpass, 'op_string')
     preproc_wf.connect(maskfunc2, 'out_file', fsl_bandpass, 'in_file')
@@ -477,9 +477,9 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'fsl_bp_susan_sm{0}_files'.format(kernel))
 
     # AFNI bandpass
-    afni_detrend = pe.MapNode(afni.Detrend(outtype='NIFTI_GZ'),
+    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ'),
                          iterfield=['in_file'],
-                         name='afni_detrend')
+                         name='afni_bp_susan_sm{0}'.format(kernel))
     preproc_wf.connect(maskfunc2, 'out_file', afni_detrend, 'in_file')
     preproc_wf.connect(afni_detrend, 'out_file',
                        outputspec, 'afni_bp_susan_sm{0}_files'.format(kernel))
@@ -492,7 +492,7 @@ for i, kernel in enumerate(kernel_values):
                                      output_names=['out_files'],
                                      function=bandpass_filter,
                                      imports=imports),
-                       name='nipype_bandpass')
+                       name='nipype_bp_susan_sm{0}'.format(kernel))
     nipype_bandpass.inputs.fs = 1. / 2.
     nipype_bandpass.inputs.highpass_freq = .008
     nipype_bandpass.inputs.lowpass_freq = 0.
@@ -525,7 +525,7 @@ for i, kernel in enumerate(kernel_values):
     # FSL bandpass
     fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
                               iterfield=['in_file'],
-                              name='fsl_bandpass')
+                              name='fsl_bp_fsl_sm{0}'.format(kernel))
     preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
                        fsl_bandpass, 'op_string')
     preproc_wf.connect(maskfunc3, 'out_file', fsl_bandpass, 'in_file')
@@ -533,9 +533,9 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'fsl_bp_fsl_sm{0}_files'.format(kernel))
 
     # AFNI bandpass
-    afni_detrend = pe.MapNode(afni.Detrend(outtype='NIFTI_GZ'),
+    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ'),
                               iterfield=['in_file'],
-                              name='afni_detrend')
+                              name='afni_bp_fsl_sm{0}'.format(kernel))
     preproc_wf.connect(maskfunc3, 'out_file', afni_detrend, 'in_file')
     preproc_wf.connect(afni_detrend, 'out_file',
                        outputspec, 'afni_bp_fsl_sm{0}_files'.format(kernel))
@@ -548,7 +548,7 @@ for i, kernel in enumerate(kernel_values):
                                      output_names=['out_files'],
                                      function=bandpass_filter,
                                      imports=imports),
-                       name='nipype_bandpass')
+                       name='nipype_bp_fsl_sm{0}'.format(kernel))
     nipype_bandpass.inputs.fs = 1. / 2.
     nipype_bandpass.inputs.highpass_freq = .008
     nipype_bandpass.inputs.lowpass_freq = 0.
@@ -582,7 +582,7 @@ for i, kernel in enumerate(kernel_values):
     # FSL bandpass
     fsl_bandpass = pe.MapNode(fsl.ImageMaths(suffix='_tempfilt'),
                               iterfield=['in_file'],
-                              name='fsl_bandpass')
+                              name='fsl_bp_afni_sm{0}'.format(kernel))
     preproc_wf.connect(determine_bp_sigmas, ('out_sigmas', highpass_operand),
                        fsl_bandpass, 'op_string')
     preproc_wf.connect(maskfunc4, 'out_file', fsl_bandpass, 'in_file')
@@ -590,9 +590,9 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'fsl_bp_afni_sm{0}_files'.format(kernel))
 
     # AFNI bandpass
-    afni_detrend = pe.MapNode(afni.Detrend(outtype='NIFTI_GZ'),
+    afni_detrend = pe.MapNode(afni.Detrend(outputtype='NIFTI_GZ'),
                          iterfield=['in_file'],
-                         name='afni_detrend')
+                         name='afni_bp_afni_sm{0}'.format(kernel))
     preproc_wf.connect(maskfunc4, 'out_file', afni_detrend, 'in_file')
     preproc_wf.connect(afni_detrend, 'out_file',
                        outputspec, 'afni_bp_afni_sm{0}_files'.format(kernel))
@@ -605,7 +605,7 @@ for i, kernel in enumerate(kernel_values):
                                      output_names=['out_files'],
                                      function=bandpass_filter,
                                      imports=imports),
-                       name='nipype_bandpass')
+                       name='nipype_bp_afni_sm{0}'.format(kernel))
     nipype_bandpass.inputs.fs = 1. / 2.
     nipype_bandpass.inputs.highpass_freq = .008
     nipype_bandpass.inputs.lowpass_freq = 0.
@@ -631,9 +631,7 @@ preproc_wf.connect(subj_iterable, 'subject_id', datasink, 'container')
 preproc_wf.connect(outputspec, 'reference', datasink, 'preproc.ref')
 preproc_wf.connect(outputspec, 'motion_parameters',
                    datasink, 'preproc.motion')
-preproc_wf.connect(outputspec, 'motion_plots',
-                   datasink, 'preproc.motion.plots')
-preproc_wf.connect(outputspec, 'motion_sltime_corrected_files',
+preproc_wf.connect(outputspec, 'motion_corrected_files',
                    datasink, 'preproc.func.realigned')
 preproc_wf.connect(getsubs, 'subs', datasink, 'substitutions')
 preproc_wf.connect(outputspec, 'reg_file', datasink, 'preproc.bbreg.@reg')
@@ -655,7 +653,6 @@ preproc_wf.connect(outputspec, 'mask_file', datasink, 'preproc.ref.@mask')
 # Create and copy graphs to output directory for easy access.
 #preproc_wf.write_graph(graph2use='flat')
 preproc_wf.write_graph(graph2use='exec')
-raise Exception()
 
 shutil.copy(join(preproc_wf.base_dir, preproc_wf.name, 'graph_detailed.dot.png'),
             join(diagram_dir, 'pipeline_graph_detailed.png'))
