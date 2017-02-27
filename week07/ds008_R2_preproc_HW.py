@@ -58,6 +58,17 @@ def get_subs(subject_id, mri_files):
     for i, mri_file in enumerate(mri_files):
         subs.append(('_motion_correct%d/' %i, ''))
         subs.append(('_art%d/' %i, ''))
+        
+        kernel_values = range(3, 13, 3)
+        for k in kernel_values:
+            for sm in ['afni', 'susan', 'fsl']:
+                sm_dir = '_{0}_mask_{1}_{2}/'.format(sm, k, i)
+                subs.append((sm_dir, ''))
+                for bp in ['afni', 'fsl', 'nipype']:
+                    bp_dir = '_{0}_bp_{1}_sm{2}_{3}/'.format(bp, sm, k, i)
+                    subs.append((bp_dir, ''))
+                    tsnr_dir = '_{0}_bp_{1}_sm{2}_tsnr_{3}/'.format(bp, sm, k, i)
+                    subs.append((tsnr_dir, ''))
     return subs
 
 
@@ -177,11 +188,14 @@ def getbtthresh(medianvals):
 
 def getusans(inlist):
     """Return the usans at the right threshold."""
-    return [[tuple([val[0],0.75*val[1]])] for val in inlist]
+    return [[tuple([val[0], 0.75*val[1]])] for val in inlist]
 
 
 def calc_fslbp_sigmas(tr, highpass_freq, lowpass_freq):
-    """Return the highpass and lowpass sigmas for fslmaths -bptf filter."""
+    """
+    Return the highpass and lowpass sigmas for fslmaths -bptf filter.
+    Convert Hz to sigma in volumes.
+    """
     if highpass_freq <= 0:
         highpass_sig = -1
     else:
@@ -212,9 +226,6 @@ diagram_dir = dirname(__file__)
 work_dir = join(salo_dir, 'working/')
 out_dir = join(salo_dir, 'data/')
 err_dir = join(salo_dir, 'crash/week07/')
-
-spatial_smoothers = ['afni_blur2fwhm']
-temporal_filterers = ['use_np_bp']
 
 sids = ['sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05',
         'sub-06', 'sub-07', 'sub-09', 'sub-10',
@@ -409,7 +420,7 @@ determine_bp_sigmas = pe.Node(util.Function(input_names=['tr',
                                             function=calc_fslbp_sigmas),
                               name='determine_bp_sigmas')
 determine_bp_sigmas.inputs.tr = 2.0
-determine_bp_sigmas.inputs.highpass_freq = 125.
+determine_bp_sigmas.inputs.highpass_freq = .008
 determine_bp_sigmas.inputs.lowpass_freq = -1
 
 afni_smooth = [[] for _ in range(len(kernel_values))]
@@ -460,7 +471,7 @@ for i, kernel in enumerate(kernel_values):
     maskfunc2 = pe.MapNode(fsl.ImageMaths(suffix='_mask',
                                           op_string='-mas'),
                            iterfield=['in_file'],
-                           name='susan_mask_{0}'.format(kernel))
+                           name='susan_mask_{0}_'.format(kernel))
     preproc_wf.connect(susan_smooth[i], 'smoothed_file', maskfunc2, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc2, 'in_file2')
@@ -479,7 +490,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'fsl_bp_susan_sm{0}_files'.format(kernel))
     
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='fsl_bp_susan_sm{0}_tsnr_files'.format(kernel))
+                      name='fsl_bp_susan_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(fsl_bandpass, 'out_file', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'fsl_bp_susan_sm{0}_tsnr_files'.format(kernel))
@@ -494,7 +505,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'afni_bp_susan_sm{0}_files'.format(kernel))
     
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='afni_bp_susan_sm{0}_tsnr_files'.format(kernel))
+                      name='afni_bp_susan_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(afni_detrend, 'out_file', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'afni_bp_susan_sm{0}_tsnr_files'.format(kernel))
@@ -516,7 +527,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'nipype_bp_susan_sm{0}_files'.format(kernel))
     
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='nipype_bp_susan_sm{0}_tsnr_files'.format(kernel))
+                      name='nipype_bp_susan_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(nipype_bandpass, 'out_files', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'nipype_bp_susan_sm{0}_tsnr_files'.format(kernel))
@@ -536,7 +547,7 @@ for i, kernel in enumerate(kernel_values):
     maskfunc3 = pe.MapNode(fsl.ImageMaths(suffix='_mask',
                                           op_string='-mas'),
                            iterfield=['in_file'],
-                           name='fsl_mask_{0}'.format(kernel))
+                           name='fsl_mask_{0}_'.format(kernel))
     preproc_wf.connect(fsl_smooth[i], 'smoothed_file', maskfunc3, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc3, 'in_file2')
@@ -555,7 +566,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'fsl_bp_fsl_sm{0}_files'.format(kernel))
     
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='fsl_bp_fsl_sm{0}_tsnr_files'.format(kernel))
+                      name='fsl_bp_fsl_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(fsl_bandpass, 'out_file', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'fsl_bp_fsl_sm{0}_tsnr_files'.format(kernel))
@@ -570,7 +581,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'afni_bp_fsl_sm{0}_files'.format(kernel))
 
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='afni_bp_fsl_sm{0}_tsnr_files'.format(kernel))
+                      name='afni_bp_fsl_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(afni_detrend, 'out_file', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'afni_bp_fsl_sm{0}_tsnr_files'.format(kernel))
@@ -592,7 +603,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'nipype_bp_fsl_sm{0}_files'.format(kernel))
     
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='nipype_bp_fsl_sm{0}_tsnr_files'.format(kernel))
+                      name='nipype_bp_fsl_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(nipype_bandpass, 'out_files', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'nipype_bp_fsl_sm{0}_tsnr_files'.format(kernel))
@@ -612,7 +623,7 @@ for i, kernel in enumerate(kernel_values):
     maskfunc4 = pe.MapNode(fsl.ImageMaths(suffix='_mask',
                                           op_string='-mas'),
                            iterfield=['in_file'],
-                           name='afni_mask_{0}'.format(kernel))
+                           name='afni_mask_{0}_'.format(kernel))
     preproc_wf.connect(afni_smooth[i], 'out_file', maskfunc4, 'in_file')
     preproc_wf.connect(fs_threshold2, ('binary_file', pickfirst),
                        maskfunc4, 'in_file2')
@@ -631,7 +642,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'fsl_bp_afni_sm{0}_files'.format(kernel))
 
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='fsl_bp_afni_sm{0}_tsnr_files'.format(kernel))
+                      name='fsl_bp_afni_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(fsl_bandpass, 'out_file', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'fsl_bp_afni_sm{0}_tsnr_files'.format(kernel))
@@ -646,7 +657,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'afni_bp_afni_sm{0}_files'.format(kernel))
 
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='afni_bp_afni_sm{0}_tsnr_files'.format(kernel))
+                      name='afni_bp_afni_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(afni_detrend, 'out_file', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'afni_bp_afni_sm{0}_tsnr_files'.format(kernel))
@@ -668,7 +679,7 @@ for i, kernel in enumerate(kernel_values):
                        outputspec, 'nipype_bp_afni_sm{0}_files'.format(kernel))
     
     tsnr = pe.MapNode(conf.TSNR(), iterfield=['in_file'],
-                      name='nipype_bp_afni_sm{0}_tsnr_files'.format(kernel))
+                      name='nipype_bp_afni_sm{0}_tsnr_'.format(kernel))
     preproc_wf.connect(nipype_bandpass, 'out_files', tsnr, 'in_file')
     preproc_wf.connect(tsnr, 'tsnr_file', outputspec,
                        'nipype_bp_afni_sm{0}_tsnr_files'.format(kernel))
@@ -679,16 +690,18 @@ datasink.inputs.base_directory = out_dir
 
 for k in kernel_values:
     for sm in ['afni', 'susan', 'fsl']:
+        out_dir1 = '{0}_sm{1}'.format(sm, k)
         sm_files = '{0}_sm{1}_files'.format(sm, k)
         preproc_wf.connect(outputspec, sm_files,
-                           datasink, 'preproc.func.smoothed.@{0}'.format(sm_files))
+                           datasink, 'preproc.func.smoothed.{0}'.format(out_dir1))
         for bp in ['afni', 'fsl', 'nipype']:
+            out_dir2 = '{0}_bp_{1}_sm{2}'.format(bp, sm, k)
             bp_files = '{0}_bp_{1}_sm{2}_files'.format(bp, sm, k)
             tsnr_files = '{0}_bp_{1}_sm{2}_tsnr_files'.format(bp, sm, k)
             preproc_wf.connect(outputspec, bp_files, datasink,
-                               'preproc.func.smoothed_highpassed.@{0}'.format(bp_files))
+                               'preproc.func.smoothed_highpassed.{0}'.format(out_dir2))
             preproc_wf.connect(outputspec, tsnr_files, datasink,
-                               'preproc.func.tsnr.@{0}'.format(tsnr_files))
+                               'preproc.func.tsnr.{0}'.format(out_dir2))
 
 preproc_wf.connect(subj_iterable, 'subject_id', datasink, 'container')
 preproc_wf.connect(outputspec, 'reference', datasink, 'preproc.ref')
