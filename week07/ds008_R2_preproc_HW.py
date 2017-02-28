@@ -320,7 +320,7 @@ preproc_wf.connect(motion_correct, 'out_file',
 # using the BBRegister command
 coregister = pe.Node(fs.BBRegister(subjects_dir=subjects_dir,
                                    contrast_type='t2',
-                                   init='header',
+                                   init='fsl',
                                    out_fsl_file=True),
                      name='coregister')
 preproc_wf.connect(subj_iterable, 'subject_id', coregister, 'subject_id')
