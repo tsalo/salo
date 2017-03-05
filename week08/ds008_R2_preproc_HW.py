@@ -144,7 +144,7 @@ subjects_dir = join(data_dir, 'surfaces/')
 salo_dir = join(class_dir, 'students/salo/')
 diagram_dir = dirname(__file__)
 work_dir = join(salo_dir, 'working/week08/')
-out_dir = join(salo_dir, 'data/func/')
+out_dir = join(salo_dir, 'data/preproc/')
 err_dir = join(salo_dir, 'crash/week08/')
 
 sids = ['sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05',
@@ -188,7 +188,7 @@ datasource = pe.Node(nio.DataGrabber(infields=['subject_id'],
                      name='datasource')
 datasource.inputs.template = '*'
 datasource.inputs.base_directory = abspath(data_dir)
-datasource.inputs.field_template = dict(mri_files='%s/func/*stopsignal*_bold.nii.gz')
+datasource.inputs.field_template = dict(mri_files='%s/func/*task-stopsignal*_bold.nii.gz')
 datasource.inputs.template_args = info
 datasource.inputs.sort_filelist = True
 datasource.inputs.ignore_exception = False

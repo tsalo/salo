@@ -43,9 +43,7 @@ def subjectinfo(subject_id):
     from copy import deepcopy
     import numpy as np
     
-    base_proj_dir = '/scratch/PSB6351_2017/ds008_R2.0.0/'
-    vec_dir = '/scratch/PSB6351_2017/students/salo/data/EVs_RTdur/'
-    subj_dir = os.path.join(base_proj_dir, subject_id)
+    vec_dir = '/scratch/PSB6351_2017/students/salo/data/EVs_RTamp/'
     runs = ['run-{0:02d}'.format(r+1) for r in range(3)]
     conditions = ['failed_stop', 'successful_stop', 'go', 'junk']
     
@@ -81,24 +79,26 @@ def get_contrasts(subject_id):
                   ['failed_stop', 'go', 'successful_stop', 'junk'],
                   [0.25, 0.25, 0.25, 0.25]],
                  ['SuccessfulStopVsGo', 'T', ['successful_stop', 'go'], [1., -1.]],
-                 ]
+                 ['SuccessfulStopVsFailedStop', 'T', ['successful_stop', 'failed_stop'], [1., -1.]],
+                 ['FailedStopVsSuccessfulStop', 'T', ['successful_stop', 'failed_stop'], [-1., 1.]],]
     return contrasts
 
 
-def get_subs(subject_id,cons,info):
+def get_subs(subject_id, cons, info):
     subs = []
-    runs = range(len(info))
+    runs = range(1, len(info)+1)
     for i, run in enumerate(runs):
-        subs.append(('_modelestimate%d/'%i, '_run_%d_%02d_'%(i,run)))
-        subs.append(('_modelgen%d/'%i, '_run_%d_%02d_'%(i,run)))
-        subs.append(('_conestimate%d/'%i, '_run_%d_%02d_'%(i,run)))
+        subs.append(('_modelestimate%d/'%i, '_run_%d_%02d_'%(i, run)))
+        subs.append(('_modelgen%d/'%i, '_run_%d_%02d_'%(i, run)))
+        subs.append(('_conestimate%d/'%i, '_run_%d_%02d_'%(i, run)))
+        subs.append(('_estimate_model%d/'%i, 'run-%02d/'%(run)))
     
     for i, con in enumerate(cons):
         subs.append(('cope%d.'%(i+1), 'cope%02d_%s.'%(i+1,con[0])))
         subs.append(('varcope%d.'%(i+1), 'varcope%02d_%s.'%(i+1,con[0])))
-        subs.append(('zstat%d.'%(i+1), 'zstat%02d_%s.'%(i+1,con[0])))
+        subs.append(('_z2pval%d/zstat%d'%(i, i+1), 'zstat%02d_%s'%(i+1,con[0])))
         subs.append(('tstat%d.'%(i+1), 'tstat%02d_%s.'%(i+1,con[0])))
-    
+        
     return subs
 
 
@@ -189,7 +189,10 @@ def firstlevel_wf(subject_id, sink_directory, name='ds008_R2_frstlvl_wf'):
                       name='datasource')
     datasource.inputs.template = '*'
     datasource.inputs.subject_id = subject_id
-    datasource.inputs.base_directory = os.path.abspath('/scratch/PSB6351_2017/students/salo/data/func/')
+    #datasource.inputs.base_directory = os.path.abspath('/scratch/PSB6351_2017/ds008_R2.0.0/preproc/')
+    #datasource.inputs.field_template = dict(task_mri_files='%s/func/realigned/*%s*.nii.gz',
+    #                                        motion_noise_files='%s/noise/%s*.txt') 
+    datasource.inputs.base_directory = os.path.abspath('/scratch/PSB6351_2017/students/salo/data/preproc/')
     datasource.inputs.field_template = dict(task_mri_files='%s/preproc/func/smoothed/corr_*_task-%s_*_bold_bet_smooth_mask.nii.gz',
                                             motion_noise_files='%s/preproc/noise/%s*.txt')
     datasource.inputs.template_args = info
@@ -198,7 +201,6 @@ def firstlevel_wf(subject_id, sink_directory, name='ds008_R2_frstlvl_wf'):
     datasource.inputs.raise_on_empty = True
     
     # Create a Function node to modify the motion and noise files to be single regressors
-    # TODO: Fix the error happening here. I don't know what the inputs should be.
     motionnoise = Node(Function(input_names=['subjinfo', 'files'],
                                 output_names=['subjinfo'],
                                 function=motion_noise),
