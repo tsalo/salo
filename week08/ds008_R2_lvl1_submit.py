@@ -7,7 +7,7 @@ subjs = ['sub-01']
 #         'sub-06', 'sub-07', 'sub-09', 'sub-10',
 #         'sub-11', 'sub-12', 'sub-13', 'sub-14', 'sub-15']
 
-workdir = '/scratch/PSB6351_2017/students/salo/crash/week08/ds008_R2_frstlvl_RTdur/'
+workdir = '/scratch/PSB6351_2017/students/salo/working/week08/ds008_R2_frstlvl_RTdur/'
 outdir = '/scratch/PSB6351_2017/students/salo/data/frstlvl_RTdur/'
 for i, sid in enumerate(subjs):
     convertcmd = ' '.join(['python', '/scratch/PSB6351_2017/students/salo/week08/ds008_R2_lvl1_HW.py', '-s', sid, '-o', outdir, '-w', workdir])

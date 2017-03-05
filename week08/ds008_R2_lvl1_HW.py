@@ -205,7 +205,7 @@ def firstlevel_wf(subject_id, sink_directory, name='ds008_R2_frstlvl_wf'):
                        name='motionnoise')
     motionnoise.inputs.ignore_exception = False
     frstlvl_wf.connect(subject_info, 'output', motionnoise, 'subjinfo')
-    frstlvl_wf.connect(datasource, 'task_mri_files', motionnoise, 'files')
+    frstlvl_wf.connect(datasource, 'motion_noise_files', motionnoise, 'files')
 
     # Create a specify model node
     specify_model = Node(SpecifyModel(), name='specify_model')
@@ -247,7 +247,7 @@ def firstlevel_wf(subject_id, sink_directory, name='ds008_R2_frstlvl_wf'):
     frstlvl_wf.connect(modelfit_inputspec, 'model_serial_correlations',
                        level1_design, 'model_serial_correlations')
 
-    # Creat a MapNode to generate a model for each run
+    # Create a MapNode to generate a model for each run
     generate_model = MapNode(FEATModel(),
                              iterfield=['fsf_file', 'ev_files'],
                              name='generate_model')
@@ -381,5 +381,5 @@ if __name__ == '__main__':
     shutil.copy(join(wf.base_dir, wf.name, 'graph.dot.png'),
                 join(diagram_dir, 'frstlvl_graph_basic.png'))
     
-    wf.config['execution']['crashdump_dir'] = '/scratch/PSB6315_2017/students/salo/crash/week08/'
+    wf.config['execution']['crashdump_dir'] = '/scratch/PSB6351_2017/students/salo/crash/week08/'
     wf.run(plugin='LSF', plugin_args={'bsub_args': '-q PQ_nbc'})
